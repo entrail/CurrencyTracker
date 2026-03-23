@@ -10,7 +10,7 @@
             <Layer level="ARTWORK">
                 <FontString name="$parentTitle" inherits="GameFontNormalLarge" text="Currencies">
                     <Anchors>
-                        <Anchor point="TOPLEFT" x="12" y="-45"/>
+                        <Anchor point="TOPLEFT" x="20" y="-45"/>
                     </Anchors>
                 </FontString>
             </Layer>

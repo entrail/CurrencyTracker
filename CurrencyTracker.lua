@@ -1,5 +1,5 @@
 local ADDON_NAME = ...
-local ADDON_VERSION = "1.2.0"
+local ADDON_VERSION = "1.2.4"
 
 CurrencyTrackerDB = CurrencyTrackerDB or {}
 CurrencyTrackerCharDB = CurrencyTrackerCharDB or {}
@@ -487,20 +487,8 @@ function CurrencyTracker_UpdateScroll()
 end
 
 local function EnsureFrameBackground()
-    if not CurrencyTrackerFrame then
-        return
-    end
-
-    if CurrencyTrackerFrame.CurrencyTrackerBG then
-        return
-    end
-
-    local bg = CurrencyTrackerFrame:CreateTexture(nil, "BACKGROUND")
-    bg:SetTexture("Interface\\Buttons\\WHITE8x8")
-    bg:SetPoint("TOPLEFT", CurrencyTrackerFrame, "TOPLEFT", 0, 0)
-    bg:SetPoint("BOTTOMRIGHT", CurrencyTrackerFrame, "BOTTOMRIGHT", 0, 0)
-    bg:SetVertexColor(0.02, 0.02, 0.02, 0.62)
-    CurrencyTrackerFrame.CurrencyTrackerBG = bg
+    -- No full-frame background; the inset panel provides its own.
+    -- A full background here would cover the character portrait.
 end
 
 local function EnsureInsetPanel()
@@ -563,6 +551,14 @@ local function EnsureInsetPanel()
     end
 
     CurrencyTrackerFrame.ContentInset = inset
+
+    -- Reparent the title onto the inset so it draws above the inset background
+    if CurrencyTrackerFrameTitle then
+        CurrencyTrackerFrameTitle:SetParent(inset)
+        CurrencyTrackerFrameTitle:SetDrawLayer("OVERLAY")
+        CurrencyTrackerFrameTitle:ClearAllPoints()
+        CurrencyTrackerFrameTitle:SetPoint("TOPLEFT", inset, "TOPLEFT", 10, -18)
+    end
 end
 
 local function EnsureScrollFrame()
@@ -648,6 +644,18 @@ local function ShowSelectedCharacterSubFrame()
     end
 end
 
+local savedPortraitFrameLevel = nil
+
+local function HidePortrait()
+    if CharacterModelFrame then CharacterModelFrame:Hide() end
+    if CharacterFramePortrait then CharacterFramePortrait:Hide() end
+end
+
+local function ShowPortrait()
+    if CharacterModelFrame then CharacterModelFrame:Show() end
+    if CharacterFramePortrait then CharacterFramePortrait:Show() end
+end
+
 local function ShowCurrenciesPanel()
     Debug("ShowCurrenciesPanel called")
     if not CurrencyTrackerFrame or not CharacterFrame then
@@ -675,6 +683,7 @@ local function ShowCurrenciesPanel()
 
     UpdateRowLayout()
     CurrencyTrackerFrame:Show()
+    HidePortrait()
     if currenciesTab then
         PanelTemplates_SelectTab(currenciesTab)
     end
@@ -702,6 +711,7 @@ end
 
 local function HideCurrenciesPanel(restoreDefaultPanel)
     Debug("HideCurrenciesPanel called (restore=" .. tostring(restoreDefaultPanel) .. ")")
+    ShowPortrait()
     if CurrencyTrackerFrame then
         CurrencyTrackerFrame:Hide()
     end
