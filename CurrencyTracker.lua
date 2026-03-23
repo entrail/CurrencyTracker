@@ -520,8 +520,8 @@ local function EnsureInsetPanel()
         inset = CreateFrame("Frame", nil, CurrencyTrackerFrame)
     end
 
-    inset:SetPoint("TOPLEFT", CurrencyTrackerFrame, "TOPLEFT", 10, -62)
-    inset:SetPoint("BOTTOMRIGHT", CurrencyTrackerFrame, "BOTTOMRIGHT", -28, 36)
+    inset:SetPoint("TOPLEFT", CurrencyTrackerFrame, "TOPLEFT", 10, -13)
+    inset:SetPoint("BOTTOMRIGHT", CurrencyTrackerFrame, "BOTTOMRIGHT", -32, 75)
     inset:SetFrameLevel(CurrencyTrackerFrame:GetFrameLevel() + 1)
 
     if not inset.SetBackdrop then
@@ -576,12 +576,12 @@ local function EnsureScrollFrame()
 
     if not CurrencyTrackerScrollFrame then
         local sf = CreateFrame("ScrollFrame", "CurrencyTrackerScrollFrame", parent, "FauxScrollFrameTemplate")
-        sf:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, -6)
-        sf:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -26, 6)
+        sf:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, -50)
+        sf:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 13, 6)
     else
         CurrencyTrackerScrollFrame:ClearAllPoints()
-        CurrencyTrackerScrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, -6)
-        CurrencyTrackerScrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -26, 6)
+        CurrencyTrackerScrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, -50)
+        CurrencyTrackerScrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 13, 6)
     end
 end
 
@@ -684,7 +684,7 @@ local function ShowCurrenciesPanel()
     if not autoDepositCheckbox then
         local cb = CreateFrame("CheckButton", "CurrencyTrackerAutoDepositCB", CurrencyTrackerFrame, "UICheckButtonTemplate")
         cb:SetSize(22, 22)
-        cb:SetPoint("BOTTOMLEFT", CurrencyTrackerFrame, "BOTTOMLEFT", 14, 8)
+        cb:SetPoint("BOTTOMLEFT", CurrencyTrackerFrame, "BOTTOMLEFT", 14, 80)
         cb:SetChecked(CurrencyTrackerCharDB.autoDeposit == true)
         cb:SetScript("OnClick", function(self)
             CurrencyTrackerCharDB.autoDeposit = self:GetChecked() == true
@@ -883,7 +883,7 @@ eventFrame:SetScript("OnEvent", function(_, event, addon)
         EnsureDB()
         EnsureCharDB()
         EnsureCountsDB()
-        EnsureFrameBackground()
+        --EnsureFrameBackground()
         SyncFrameToCharacterLayout()
         EnsureInsetPanel()
         EnsureScrollFrame()
