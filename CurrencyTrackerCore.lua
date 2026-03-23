@@ -6,7 +6,7 @@
 
 local _, CT = ...
 
-CT.VERSION = "1.4.0"
+CT.VERSION = "1.4.1"
 
 -- Shared state
 CT.bankDataKnownThisSession = false
