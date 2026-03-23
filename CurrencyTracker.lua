@@ -1,5 +1,5 @@
 local ADDON_NAME = ...
-local ADDON_VERSION = "1.1.11"
+local ADDON_VERSION = "1.2.0"
 
 CurrencyTrackerDB = CurrencyTrackerDB or {}
 CurrencyTrackerCharDB = CurrencyTrackerCharDB or {}
@@ -14,9 +14,18 @@ local ROW_HEIGHT = 21
 local HEADER_HEIGHT = 21
 local ROW_SPACING = 1
 local bankDataKnownThisSession = false
+local autoDepositCheckbox = nil
+local depositQueue = {}
 local eventFrame
 
 local function Debug(msg)
+    if not CurrencyTrackerDB.debugEnabled then
+        return
+    end
+    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[CurrencyTracker]|r " .. msg)
+end
+
+local function DebugAlways(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[CurrencyTracker]|r " .. msg)
 end
 
@@ -126,8 +135,11 @@ local function CollectItemCounts(itemID)
 
     if not bankDataKnownThisSession and bankFromAPI == 0 and storedBank > 0 then
         bankCount = storedBank
+        Debug("  Using stored bank count for id=" .. itemID .. ": " .. storedBank)
     end
 
+    local itemName = GetItemInfo(itemID) or ("ID:" .. itemID)
+    Debug("  Count: " .. itemName .. " bag=" .. bagCount .. " bank=" .. bankCount .. " total=" .. (bagCount + bankCount))
     return SaveItemCounts(itemID, bagCount, bankCount)
 end
 
@@ -150,6 +162,15 @@ local function ShowItemTooltip(row, entry)
 
     GameTooltip:Show()
 end
+local function EnsureDB()
+    if type(CurrencyTrackerDB) ~= "table" then
+        CurrencyTrackerDB = {}
+    end
+    if CurrencyTrackerDB.debugEnabled == nil then
+        CurrencyTrackerDB.debugEnabled = false
+    end
+end
+
 local function EnsureCharDB()
     if type(CurrencyTrackerCharDB) ~= "table" then
         CurrencyTrackerCharDB = {}
@@ -158,10 +179,128 @@ local function EnsureCharDB()
     if type(CurrencyTrackerCharDB.collapsed) ~= "table" then
         CurrencyTrackerCharDB.collapsed = {}
     end
+
+    if CurrencyTrackerCharDB.autoDeposit == nil then
+        CurrencyTrackerCharDB.autoDeposit = false
+    end
 end
 
 local function IsCollapsed(header)
     return CurrencyTrackerCharDB and CurrencyTrackerCharDB.collapsed and CurrencyTrackerCharDB.collapsed[header] == true
+end
+
+local function GetAllTrackedItemIDs()
+    local ids = {}
+    local playerFaction = UnitFactionGroup("player")
+    for _, category in ipairs(CURRENCIES) do
+        for _, item in ipairs(category.items) do
+            if not item.faction or item.faction == playerFaction then
+                ids[item.id] = true
+            end
+        end
+    end
+    return ids
+end
+
+local function AutoDepositBadgesToBank()
+    Debug("Bank opened - auto-deposit enabled: " .. tostring(CurrencyTrackerCharDB.autoDeposit))
+    if not CurrencyTrackerCharDB.autoDeposit then
+        Debug("Auto-deposit is DISABLED, skipping.")
+        return
+    end
+
+    local trackedIDs = GetAllTrackedItemIDs()
+    WipeTable(depositQueue)
+
+    local trackedCount = 0
+    for id in pairs(trackedIDs) do
+        trackedCount = trackedCount + 1
+        local name = GetItemInfo(id) or ("Unknown")
+        Debug("  Tracking: " .. name .. " (id=" .. id .. ")")
+    end
+    Debug("Scanning bags for " .. trackedCount .. " tracked item IDs...")
+
+    -- Resolve container API (TBC Anniversary may use C_Container)
+    local getNumSlots = GetContainerNumSlots
+    local getItemID = GetContainerItemID
+    local getItemInfo_container = GetContainerItemInfo
+    local useItem = UseContainerItem
+
+    if C_Container then
+        getNumSlots = C_Container.GetContainerNumSlots or getNumSlots
+        getItemID = C_Container.GetContainerItemID or getItemID
+        getItemInfo_container = C_Container.GetContainerItemInfo or getItemInfo_container
+        useItem = C_Container.UseContainerItem or useItem
+        Debug("Using C_Container API")
+    else
+        Debug("Using legacy container API")
+    end
+
+    -- Scan all bags and record matches
+    local foundIDs = {}
+    for bag = 0, 4 do
+        local numSlots = getNumSlots(bag)
+        local occupied = 0
+        for slot = 1, numSlots do
+            local itemID = getItemID(bag, slot)
+            if itemID then
+                occupied = occupied + 1
+                if trackedIDs[itemID] then
+                    local itemName = GetItemInfo(itemID) or ("ID:" .. itemID)
+                    local countVal
+                    local info = getItemInfo_container(bag, slot)
+                    if type(info) == "table" then
+                        countVal = info.stackCount
+                    else
+                        local _, c = getItemInfo_container(bag, slot)
+                        countVal = c
+                    end
+                    Debug("  FOUND: " .. itemName .. " (id=" .. itemID .. ") x" .. (countVal or "?") .. " in bag " .. bag .. " slot " .. slot)
+                    foundIDs[itemID] = true
+                    table.insert(depositQueue, { bag = bag, slot = slot, itemID = itemID, itemName = itemName, useFunc = useItem })
+                end
+            end
+        end
+        Debug("  Bag " .. bag .. ": " .. numSlots .. " slots, " .. occupied .. " occupied")
+    end
+
+    -- Report which tracked badges were NOT found in any bag
+    for id in pairs(trackedIDs) do
+        if not foundIDs[id] then
+            local name = GetItemInfo(id) or ("Unknown")
+            Debug("  NOT IN BAGS: " .. name .. " (id=" .. id .. ") - nothing to deposit for this badge")
+        end
+    end
+
+    if #depositQueue == 0 then
+        Debug("No tracked badges found in bags, nothing to deposit.")
+        return
+    end
+
+    Debug("Queued " .. #depositQueue .. " item stack(s) for deposit.")
+
+    local idx = 0
+    local depositUseFunc = useItem
+    local depositGetID = getItemID
+    local function DepositNext()
+        idx = idx + 1
+        if idx > #depositQueue then
+            Debug("Deposit queue complete.")
+            return
+        end
+        local entry = depositQueue[idx]
+        local currentID = depositGetID(entry.bag, entry.slot)
+        if currentID and trackedIDs[currentID] then
+            local name = GetItemInfo(currentID) or ("ID:" .. currentID)
+            Debug("  Depositing: " .. name .. " from bag " .. entry.bag .. " slot " .. entry.slot)
+            depositUseFunc(entry.bag, entry.slot)
+        else
+            Debug("  Skipped bag " .. entry.bag .. " slot " .. entry.slot .. " (item moved or gone, was " .. (entry.itemName or "?") .. ")")
+        end
+        C_Timer.After(0.15, DepositNext)
+    end
+
+    C_Timer.After(0.3, DepositNext)
 end
 
 local function BuildFlatList()
@@ -382,7 +521,7 @@ local function EnsureInsetPanel()
     end
 
     inset:SetPoint("TOPLEFT", CurrencyTrackerFrame, "TOPLEFT", 10, -62)
-    inset:SetPoint("BOTTOMRIGHT", CurrencyTrackerFrame, "BOTTOMRIGHT", -28, 14)
+    inset:SetPoint("BOTTOMRIGHT", CurrencyTrackerFrame, "BOTTOMRIGHT", -28, 36)
     inset:SetFrameLevel(CurrencyTrackerFrame:GetFrameLevel() + 1)
 
     if not inset.SetBackdrop then
@@ -510,7 +649,9 @@ local function ShowSelectedCharacterSubFrame()
 end
 
 local function ShowCurrenciesPanel()
+    Debug("ShowCurrenciesPanel called")
     if not CurrencyTrackerFrame or not CharacterFrame then
+        Debug("  Aborted: missing CurrencyTrackerFrame or CharacterFrame")
         return
     end
 
@@ -539,9 +680,28 @@ local function ShowCurrenciesPanel()
     end
     BuildFlatList()
     CurrencyTracker_UpdateScroll()
+
+    if not autoDepositCheckbox then
+        local cb = CreateFrame("CheckButton", "CurrencyTrackerAutoDepositCB", CurrencyTrackerFrame, "UICheckButtonTemplate")
+        cb:SetSize(22, 22)
+        cb:SetPoint("BOTTOMLEFT", CurrencyTrackerFrame, "BOTTOMLEFT", 14, 8)
+        cb:SetChecked(CurrencyTrackerCharDB.autoDeposit == true)
+        cb:SetScript("OnClick", function(self)
+            CurrencyTrackerCharDB.autoDeposit = self:GetChecked() == true
+        end)
+
+        local label = cb:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+        label:SetPoint("LEFT", cb, "RIGHT", 2, 1)
+        label:SetText("Auto-deposit badges to bank")
+        autoDepositCheckbox = cb
+    end
+
+    autoDepositCheckbox:SetChecked(CurrencyTrackerCharDB.autoDeposit == true)
+    autoDepositCheckbox:Show()
 end
 
 local function HideCurrenciesPanel(restoreDefaultPanel)
+    Debug("HideCurrenciesPanel called (restore=" .. tostring(restoreDefaultPanel) .. ")")
     if CurrencyTrackerFrame then
         CurrencyTrackerFrame:Hide()
     end
@@ -613,6 +773,103 @@ local function EnsureCurrenciesTab()
     end
 end
 
+-- Slash command to toggle debug mode
+SLASH_CURRENCYTRACKERDEBUG1 = "/ctdebug"
+SlashCmdList["CURRENCYTRACKERDEBUG"] = function()
+    EnsureDB()
+    CurrencyTrackerDB.debugEnabled = not CurrencyTrackerDB.debugEnabled
+    if CurrencyTrackerDB.debugEnabled then
+        DebugAlways("Debug mode |cff00ff00ENABLED|r. Type /ctdebug to disable.")
+    else
+        DebugAlways("Debug mode |cffff0000DISABLED|r. Type /ctdebug to enable.")
+    end
+end
+
+-- Interface Options panel (Escape > Options > AddOns)
+local function CreateOptionsPanel()
+    local panel = CreateFrame("Frame", "CurrencyTrackerOptionsPanel", UIParent)
+    panel.name = "CurrencyTracker"
+
+    local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("CurrencyTracker v" .. ADDON_VERSION)
+
+    local subtitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+    subtitle:SetText("Configure addon settings below.")
+
+    local cbTemplate = "UICheckButtonTemplate"
+
+    -- Debug checkbox
+    local debugCB = CreateFrame("CheckButton", "CurrencyTrackerOptDebugCB", panel, cbTemplate)
+    debugCB:SetPoint("TOPLEFT", subtitle, "BOTTOMLEFT", 0, -16)
+    debugCB:SetSize(26, 26)
+
+    local debugLabel = debugCB:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    debugLabel:SetPoint("LEFT", debugCB, "RIGHT", 4, 1)
+    debugLabel:SetText("Enable debug logging in chat")
+
+    debugCB:SetChecked(CurrencyTrackerDB.debugEnabled == true)
+    debugCB:SetScript("OnClick", function(self)
+        CurrencyTrackerDB.debugEnabled = self:GetChecked() == true
+        if CurrencyTrackerDB.debugEnabled then
+            DebugAlways("Debug mode |cff00ff00ENABLED|r")
+        else
+            DebugAlways("Debug mode |cffff0000DISABLED|r")
+        end
+    end)
+
+    local debugDesc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    debugDesc:SetPoint("TOPLEFT", debugCB, "BOTTOMLEFT", 26, -2)
+    debugDesc:SetText("Prints detailed info about events, bag scans, and deposits to chat. Also available via /ctdebug")
+    debugDesc:SetTextColor(0.6, 0.6, 0.6)
+    debugDesc:SetWidth(380)
+    debugDesc:SetJustifyH("LEFT")
+
+    -- Auto-deposit checkbox
+    local depositCB = CreateFrame("CheckButton", "CurrencyTrackerOptDepositCB", panel, cbTemplate)
+    depositCB:SetPoint("TOPLEFT", debugDesc, "BOTTOMLEFT", -26, -16)
+    depositCB:SetSize(26, 26)
+
+    local depositLabel = depositCB:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    depositLabel:SetPoint("LEFT", depositCB, "RIGHT", 4, 1)
+    depositLabel:SetText("Auto-deposit badges to bank on bank open")
+
+    depositCB:SetChecked(CurrencyTrackerCharDB.autoDeposit == true)
+    depositCB:SetScript("OnClick", function(self)
+        CurrencyTrackerCharDB.autoDeposit = self:GetChecked() == true
+        if autoDepositCheckbox then
+            autoDepositCheckbox:SetChecked(CurrencyTrackerCharDB.autoDeposit == true)
+        end
+    end)
+
+    local depositDesc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    depositDesc:SetPoint("TOPLEFT", depositCB, "BOTTOMLEFT", 26, -2)
+    depositDesc:SetText("Automatically moves all tracked currency items from bags to bank when the bank is opened. (Per-character setting)")
+    depositDesc:SetTextColor(0.6, 0.6, 0.6)
+    depositDesc:SetWidth(380)
+    depositDesc:SetJustifyH("LEFT")
+
+    -- Sync state when panel is shown
+    panel:SetScript("OnShow", function()
+        debugCB:SetChecked(CurrencyTrackerDB.debugEnabled == true)
+        depositCB:SetChecked(CurrencyTrackerCharDB.autoDeposit == true)
+    end)
+
+    -- Register with whichever options API exists
+    if Settings and Settings.RegisterCanvasLayoutCategory then
+        local category = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
+        if category then
+            category.ID = panel.name
+            Settings.RegisterAddOnCategory(category)
+        end
+    elseif InterfaceOptions_AddCategory then
+        InterfaceOptions_AddCategory(panel)
+    else
+        DebugAlways("Warning: Could not register options panel - no supported API found")
+    end
+end
+
 eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
@@ -623,6 +880,7 @@ eventFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
 
 eventFrame:SetScript("OnEvent", function(_, event, addon)
     if event == "ADDON_LOADED" and addon == ADDON_NAME then
+        EnsureDB()
         EnsureCharDB()
         EnsureCountsDB()
         EnsureFrameBackground()
@@ -631,7 +889,8 @@ eventFrame:SetScript("OnEvent", function(_, event, addon)
         EnsureScrollFrame()
         EnsureCurrenciesTab()
         UpdateHeaderVersionText()
-        Debug("CurrencyTracker loaded. v" .. ADDON_VERSION)
+        CreateOptionsPanel()
+        DebugAlways("CurrencyTracker loaded. v" .. ADDON_VERSION .. " (debug " .. (CurrencyTrackerDB.debugEnabled and "ON" or "OFF") .. ", /ctdebug to toggle)")
 
         for i = 1, MAX_ROWS do
             if not rows[i] then
@@ -661,21 +920,27 @@ eventFrame:SetScript("OnEvent", function(_, event, addon)
             end
         end)
     elseif event == "PLAYER_LOGIN" then
+        EnsureDB()
         EnsureCharDB()
         EnsureCountsDB()
         EnsureCurrenciesTab()
+        Debug("PLAYER_LOGIN complete")
     elseif event == "BANKFRAME_OPENED" then
+        Debug("Event: BANKFRAME_OPENED")
         bankDataKnownThisSession = true
         BuildFlatList()
         if CurrencyTrackerFrame and CurrencyTrackerFrame:IsShown() then
             CurrencyTracker_UpdateScroll()
         end
+        AutoDepositBadgesToBank()
     elseif event == "GET_ITEM_INFO_RECEIVED" then
+        Debug("Event: GET_ITEM_INFO_RECEIVED")
         BuildFlatList()
         if CurrencyTrackerFrame and CurrencyTrackerFrame:IsShown() then
             CurrencyTracker_UpdateScroll()
         end
     elseif event == "BAG_UPDATE_DELAYED" or event == "PLAYERBANKSLOTS_CHANGED" then
+        Debug("Event: " .. event)
         BuildFlatList()
         if CurrencyTrackerFrame and CurrencyTrackerFrame:IsShown() then
             CurrencyTracker_UpdateScroll()
