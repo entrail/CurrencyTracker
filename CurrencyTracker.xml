@@ -1,0 +1,28 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+
+    <Frame name="CurrencyTrackerFrame" parent="CharacterFrame" hidden="true">
+        <Size x="320" y="358"/>
+        <Anchors>
+            <Anchor point="TOPLEFT" relativeTo="CharacterFrame" relativePoint="TOPLEFT" x="58" y="-74"/>
+        </Anchors>
+
+        <Layers>
+            <Layer level="ARTWORK">
+                <FontString name="$parentTitle" inherits="GameFontNormalLarge" text="Currencies">
+                    <Anchors>
+                        <Anchor point="TOPLEFT" x="12" y="-45"/>
+                    </Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+
+        <ScrollFrame name="CurrencyTrackerScrollFrame" inherits="FauxScrollFrameTemplate">
+            <Size x="278" y="308"/>
+            <Anchors>
+                <Anchor point="TOPLEFT" x="14" y="-40"/>
+            </Anchors>
+        </ScrollFrame>
+
+    </Frame>
+
+</Ui>

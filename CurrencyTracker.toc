@@ -1,0 +1,9 @@
+## Interface: 20500
+## Title: CurrencyTracker
+## Version: 1.1.11
+## Notes: Adds a currencies tab control with classic inset styling and safe tab switching
+## SavedVariables: CurrencyTrackerDB
+## SavedVariablesPerCharacter: CurrencyTrackerCharDB
+
+CurrencyTracker.xml
+CurrencyTracker.lua

@@ -1,0 +1,684 @@
+local ADDON_NAME = ...
+local ADDON_VERSION = "1.1.11"
+
+CurrencyTrackerDB = CurrencyTrackerDB or {}
+CurrencyTrackerCharDB = CurrencyTrackerCharDB or {}
+
+local currenciesTab = nil
+local subFrameHookInstalled = false
+local lastSelectedCharacterTabIndex = nil
+local rows = {}
+local MAX_ROWS = 20
+local NUM_ROWS = 10
+local ROW_HEIGHT = 21
+local HEADER_HEIGHT = 21
+local ROW_SPACING = 1
+local bankDataKnownThisSession = false
+local eventFrame
+
+local function Debug(msg)
+    DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[CurrencyTracker]|r " .. msg)
+end
+
+local function UpdateHeaderVersionText()
+    if CurrencyTrackerFrameTitle then
+        CurrencyTrackerFrameTitle:SetText("Currencies (" .. ADDON_VERSION .. ")")
+    end
+end
+
+local function CreateFrameSafe(frameType, frameName, parent, template)
+    local ok, frame = pcall(CreateFrame, frameType, frameName, parent, template)
+    if ok then
+        return frame
+    end
+
+    return nil
+end
+
+local function WipeTable(t)
+    local wipeFunc = wipe or table.wipe
+    if type(wipeFunc) == "function" then
+        wipeFunc(t)
+        return
+    end
+
+    for k in pairs(t) do
+        t[k] = nil
+    end
+end
+
+local CURRENCIES = {
+    {
+        header = "Battleground",
+        items = {
+            { id = 20558, name = "Warsong Gulch Mark of Honor" },
+            { id = 20559, name = "Arathi Basin Mark of Honor" },
+            { id = 20560, name = "Alterac Valley Mark of Honor" },
+            { id = 29024, name = "Eye of the Storm Mark of Honor" },
+        },
+    },
+    {
+        header = "Dungeon and Raids",
+        items = {
+            { id = 29434, name = "Badge of Justice" },
+        },
+    },
+    {
+        header = "Open World PvP",
+        items = {
+            { id = 26045, name = "Halaa Battle Token" },
+            { id = 26044, name = "Halaa Research Token" },
+            { id = 24581, name = "Mark of Thrallmar", faction = "Horde" },
+            { id = 24579, name = "Mark of Honor Hold", faction = "Alliance" },
+            { id = 28558, name = "Spirit Shard" },
+        },
+    },
+}
+
+local flatList = {}
+local ICON_FALLBACK = "Interface\\Icons\\INV_Misc_QuestionMark"
+
+
+local function EnsureCountsDB()
+    if type(CurrencyTrackerCharDB) ~= "table" then
+        CurrencyTrackerCharDB = {}
+    end
+
+    if type(CurrencyTrackerCharDB.counts) ~= "table" then
+        CurrencyTrackerCharDB.counts = {}
+    end
+end
+
+local function SaveItemCounts(itemID, bagCount, bankCount)
+    EnsureCountsDB()
+
+    CurrencyTrackerCharDB.counts[itemID] = {
+        bag = bagCount,
+        bank = bankCount,
+        total = bagCount + bankCount,
+        updatedAt = time(),
+    }
+
+    return CurrencyTrackerCharDB.counts[itemID]
+end
+
+local function GetStoredCounts(itemID)
+    EnsureCountsDB()
+    local stored = CurrencyTrackerCharDB.counts[itemID]
+    if not stored then
+        return 0, 0
+    end
+
+    return stored.bag or 0, stored.bank or 0
+end
+
+local function CollectItemCounts(itemID)
+    local bagCount = GetItemCount(itemID, false) or 0
+    local totalWithBank = GetItemCount(itemID, true) or bagCount
+    local bankFromAPI = totalWithBank - bagCount
+
+    if bankFromAPI < 0 then
+        bankFromAPI = 0
+    end
+
+    local _, storedBank = GetStoredCounts(itemID)
+    local bankCount = bankFromAPI
+
+    if not bankDataKnownThisSession and bankFromAPI == 0 and storedBank > 0 then
+        bankCount = storedBank
+    end
+
+    return SaveItemCounts(itemID, bagCount, bankCount)
+end
+
+local function ShowItemTooltip(row, entry)
+    GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+
+    if entry.id then
+        GameTooltip:SetHyperlink("item:" .. entry.id)
+    else
+        GameTooltip:SetText(entry.text or "Unknown Currency")
+    end
+
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddDoubleLine("In Bags:", tostring(entry.bag or 0), 1, 1, 1, 1, 1, 1)
+    GameTooltip:AddDoubleLine("In Bank:", tostring(entry.bank or 0), 1, 1, 1, 1, 1, 1)
+
+    if not bankDataKnownThisSession then
+        GameTooltip:AddLine("Bank data may be from your last bank visit.", 0.8, 0.8, 0.8, true)
+    end
+
+    GameTooltip:Show()
+end
+local function EnsureCharDB()
+    if type(CurrencyTrackerCharDB) ~= "table" then
+        CurrencyTrackerCharDB = {}
+    end
+
+    if type(CurrencyTrackerCharDB.collapsed) ~= "table" then
+        CurrencyTrackerCharDB.collapsed = {}
+    end
+end
+
+local function IsCollapsed(header)
+    return CurrencyTrackerCharDB and CurrencyTrackerCharDB.collapsed and CurrencyTrackerCharDB.collapsed[header] == true
+end
+
+local function BuildFlatList()
+    WipeTable(flatList)
+
+    local playerFaction = UnitFactionGroup("player")
+
+    for _, category in ipairs(CURRENCIES) do
+        table.insert(flatList, {
+            isHeader = true,
+            header = category.header,
+            text = category.header,
+        })
+
+        if not IsCollapsed(category.header) then
+            for _, item in ipairs(category.items) do
+                if not item.faction or item.faction == playerFaction then
+                    local counts = CollectItemCounts(item.id)
+                    local icon = GetItemIcon(item.id)
+                    local localizedName = GetItemInfo(item.id) or item.name
+
+                    table.insert(flatList, {
+                        isHeader = false,
+                        id = item.id,
+                        text = localizedName,
+                        count = counts.total or 0,
+                        bag = counts.bag or 0,
+                        bank = counts.bank or 0,
+                        icon = icon or ICON_FALLBACK,
+                    })
+                end
+            end
+        end
+    end
+end
+
+local function ToggleHeader(header)
+    if not header then
+        return
+    end
+
+    CurrencyTrackerCharDB.collapsed[header] = not IsCollapsed(header)
+    BuildFlatList()
+end
+
+local function CreateRow(i)
+    local row = CreateFrame("Button", nil, CurrencyTrackerFrame)
+    row:SetWidth(260)
+    row:SetHeight(ROW_HEIGHT)
+
+    if i == 1 then
+        row:SetPoint("TOPLEFT", CurrencyTrackerScrollFrame, "TOPLEFT", 2, -2)
+    else
+        row:SetPoint("TOPLEFT", rows[i - 1], "BOTTOMLEFT", 0, -ROW_SPACING)
+    end
+
+    row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+
+    row.headerBG = row:CreateTexture(nil, "BACKGROUND")
+    row.headerBG:SetAllPoints(row)
+    row.headerBG:SetTexture("Interface\\Buttons\\WHITE8x8")
+    row.headerBG:SetVertexColor(0.21, 0.17, 0.08, 0.95)
+    row.headerBG:Hide()
+
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(14, 14)
+    row.icon:SetPoint("RIGHT", -8, 0)
+    row.icon:SetTexture(ICON_FALLBACK)
+    row.icon:Hide()
+
+    row.count = row:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    row.count:SetPoint("RIGHT", -28, 0)
+    row.count:SetJustifyH("RIGHT")
+
+    row.text = row:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    row.text:SetPoint("LEFT", 8, 0)
+    row.text:SetPoint("RIGHT", row.count, "LEFT", -8, 0)
+    row.text:SetJustifyH("LEFT")
+
+    row:SetScript("OnClick", function(self)
+        local entry = self.entry
+        if entry and entry.isHeader then
+            ToggleHeader(entry.header)
+            CurrencyTracker_UpdateScroll()
+        end
+    end)
+
+    row:SetScript("OnEnter", function(self)
+        local entry = self.entry
+        if not entry or entry.isHeader then
+            return
+        end
+
+        ShowItemTooltip(self, entry)
+    end)
+
+    row:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
+    return row
+end
+
+local function UpdateRowLayout()
+    if not CurrencyTrackerScrollFrame then
+        return
+    end
+
+    local rowPitch = ROW_HEIGHT + ROW_SPACING
+    local height = CurrencyTrackerScrollFrame:GetHeight() or 0
+    if height <= 0 then
+        height = 200
+    end
+    NUM_ROWS = math.max(1, math.floor((height + ROW_SPACING) / rowPitch))
+    NUM_ROWS = math.min(NUM_ROWS, MAX_ROWS)
+
+    local scrollWidth = CurrencyTrackerScrollFrame:GetWidth() or 280
+    if scrollWidth <= 0 then
+        scrollWidth = 280
+    end
+
+    local rowWidth = math.max(120, scrollWidth - 24)
+    for i = 1, #rows do
+        local row = rows[i]
+        row:SetWidth(rowWidth)
+    end
+end
+
+function CurrencyTracker_UpdateScroll()
+    local offset = 0
+    if CurrencyTrackerScrollFrame and type(FauxScrollFrame_GetOffset) == "function" then
+        offset = FauxScrollFrame_GetOffset(CurrencyTrackerScrollFrame) or 0
+    end
+    local total = #flatList
+
+    for i = 1, MAX_ROWS do
+        local row = rows[i]
+        local index = i + offset
+
+        if i <= NUM_ROWS and index <= total then
+            local entry = flatList[index]
+            row.entry = entry
+
+            if entry.isHeader then
+                local collapsed = IsCollapsed(entry.header)
+                local prefix = collapsed and "+ " or "- "
+
+                row:SetHeight(HEADER_HEIGHT)
+                row.headerBG:Show()
+                row.icon:Hide()
+                row.text:SetFontObject("GameFontNormal")
+                row.text:SetPoint("LEFT", 8, 0)
+                row.text:SetText("|cffffff00" .. prefix .. entry.text .. "|r")
+                row.count:SetTextColor(1, 1, 1)
+                row.count:SetText("")
+            else
+                row:SetHeight(ROW_HEIGHT)
+                row.headerBG:Hide()
+                row.icon:Show()
+                row.icon:SetTexture(entry.icon or ICON_FALLBACK)
+                row.text:SetFontObject("GameFontHighlightSmall")
+                row.text:SetPoint("LEFT", 8, 0)
+                row.text:SetText(entry.text)
+
+                if (entry.count or 0) == 0 then
+                    row.count:SetTextColor(0.65, 0.65, 0.65)
+                else
+                    row.count:SetTextColor(1, 1, 1)
+                end
+
+                row.count:SetText(tostring(entry.count or 0))
+            end
+
+            row:Show()
+        else
+            row.entry = nil
+            row:Hide()
+        end
+    end
+
+    if CurrencyTrackerScrollFrame and type(FauxScrollFrame_Update) == "function" then
+        FauxScrollFrame_Update(CurrencyTrackerScrollFrame, total, NUM_ROWS, ROW_HEIGHT + ROW_SPACING)
+    end
+end
+
+local function EnsureFrameBackground()
+    if not CurrencyTrackerFrame then
+        return
+    end
+
+    if CurrencyTrackerFrame.CurrencyTrackerBG then
+        return
+    end
+
+    local bg = CurrencyTrackerFrame:CreateTexture(nil, "BACKGROUND")
+    bg:SetTexture("Interface\\Buttons\\WHITE8x8")
+    bg:SetPoint("TOPLEFT", CurrencyTrackerFrame, "TOPLEFT", 0, 0)
+    bg:SetPoint("BOTTOMRIGHT", CurrencyTrackerFrame, "BOTTOMRIGHT", 0, 0)
+    bg:SetVertexColor(0.02, 0.02, 0.02, 0.62)
+    CurrencyTrackerFrame.CurrencyTrackerBG = bg
+end
+
+local function EnsureInsetPanel()
+    if not CurrencyTrackerFrame then
+        return
+    end
+
+    if CurrencyTrackerFrame.ContentInset then
+        return
+    end
+
+    local inset = CreateFrameSafe("Frame", nil, CurrencyTrackerFrame, "InsetFrameTemplate3")
+    if not inset then
+        inset = CreateFrameSafe("Frame", nil, CurrencyTrackerFrame, "InsetFrameTemplate")
+    end
+    if not inset then
+        inset = CreateFrame("Frame", nil, CurrencyTrackerFrame)
+    end
+
+    inset:SetPoint("TOPLEFT", CurrencyTrackerFrame, "TOPLEFT", 10, -62)
+    inset:SetPoint("BOTTOMRIGHT", CurrencyTrackerFrame, "BOTTOMRIGHT", -28, 14)
+    inset:SetFrameLevel(CurrencyTrackerFrame:GetFrameLevel() + 1)
+
+    if not inset.SetBackdrop then
+        local borderColorR, borderColorG, borderColorB, borderAlpha = 0.75, 0.66, 0.40, 0.9
+        local bgColorR, bgColorG, bgColorB, bgAlpha = 0.04, 0.04, 0.04, 0.82
+
+        local fill = inset:CreateTexture(nil, "BACKGROUND")
+        fill:SetTexture("Interface\\Buttons\\WHITE8x8")
+        fill:SetAllPoints(inset)
+        fill:SetVertexColor(bgColorR, bgColorG, bgColorB, bgAlpha)
+
+        local top = inset:CreateTexture(nil, "BORDER")
+        top:SetTexture("Interface\\Buttons\\WHITE8x8")
+        top:SetPoint("TOPLEFT", inset, "TOPLEFT", 0, 0)
+        top:SetPoint("TOPRIGHT", inset, "TOPRIGHT", 0, 0)
+        top:SetHeight(1)
+        top:SetVertexColor(borderColorR, borderColorG, borderColorB, borderAlpha)
+
+        local bottom = inset:CreateTexture(nil, "BORDER")
+        bottom:SetTexture("Interface\\Buttons\\WHITE8x8")
+        bottom:SetPoint("BOTTOMLEFT", inset, "BOTTOMLEFT", 0, 0)
+        bottom:SetPoint("BOTTOMRIGHT", inset, "BOTTOMRIGHT", 0, 0)
+        bottom:SetHeight(1)
+        bottom:SetVertexColor(borderColorR, borderColorG, borderColorB, borderAlpha)
+
+        local left = inset:CreateTexture(nil, "BORDER")
+        left:SetTexture("Interface\\Buttons\\WHITE8x8")
+        left:SetPoint("TOPLEFT", inset, "TOPLEFT", 0, 0)
+        left:SetPoint("BOTTOMLEFT", inset, "BOTTOMLEFT", 0, 0)
+        left:SetWidth(1)
+        left:SetVertexColor(borderColorR, borderColorG, borderColorB, borderAlpha)
+
+        local right = inset:CreateTexture(nil, "BORDER")
+        right:SetTexture("Interface\\Buttons\\WHITE8x8")
+        right:SetPoint("TOPRIGHT", inset, "TOPRIGHT", 0, 0)
+        right:SetPoint("BOTTOMRIGHT", inset, "BOTTOMRIGHT", 0, 0)
+        right:SetWidth(1)
+        right:SetVertexColor(borderColorR, borderColorG, borderColorB, borderAlpha)
+    end
+
+    CurrencyTrackerFrame.ContentInset = inset
+end
+
+local function EnsureScrollFrame()
+    EnsureInsetPanel()
+
+    local parent = CurrencyTrackerFrame.ContentInset or CurrencyTrackerFrame
+
+    if not parent then
+        return
+    end
+
+    if not CurrencyTrackerScrollFrame then
+        local sf = CreateFrame("ScrollFrame", "CurrencyTrackerScrollFrame", parent, "FauxScrollFrameTemplate")
+        sf:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, -6)
+        sf:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -26, 6)
+    else
+        CurrencyTrackerScrollFrame:ClearAllPoints()
+        CurrencyTrackerScrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, -6)
+        CurrencyTrackerScrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -26, 6)
+    end
+end
+
+local function SyncFrameToCharacterLayout()
+    if not CurrencyTrackerFrame then
+        return
+    end
+
+    if ReputationFrame then
+        CurrencyTrackerFrame:ClearAllPoints()
+        CurrencyTrackerFrame:SetAllPoints(ReputationFrame)
+    end
+end
+
+local function DeselectDefaultCharacterTabs()
+    for i = 1, 10 do
+        local tab = _G["CharacterFrameTab" .. i]
+        if not tab then
+            break
+        end
+
+        PanelTemplates_DeselectTab(tab)
+    end
+end
+
+local function RestoreDefaultCharacterTabHighlight()
+    if not lastSelectedCharacterTabIndex then
+        return
+    end
+
+    local tab = _G["CharacterFrameTab" .. lastSelectedCharacterTabIndex]
+    if tab then
+        PanelTemplates_SelectTab(tab)
+    end
+end
+
+local function HideDefaultCharacterPanels()
+    if PaperDollFrame then PaperDollFrame:Hide() end
+    if ReputationFrame then ReputationFrame:Hide() end
+    if SkillFrame then SkillFrame:Hide() end
+    if PVPFrame then PVPFrame:Hide() end
+end
+
+local function ShowSelectedCharacterSubFrame()
+    local frameName = nil
+
+    if CharacterFrame and type(CHARACTERFRAME_SUBFRAMES) == "table" and type(PanelTemplates_GetSelectedTab) == "function" then
+        local selectedTab = PanelTemplates_GetSelectedTab(CharacterFrame) or 1
+        frameName = CHARACTERFRAME_SUBFRAMES[selectedTab]
+    end
+
+    if not frameName then
+        frameName = "PaperDollFrame"
+    end
+
+    if not InCombatLockdown() and type(CharacterFrame_ShowSubFrame) == "function" then
+        CharacterFrame_ShowSubFrame(frameName)
+        return
+    end
+
+    local frame = _G[frameName]
+    if frame then
+        frame:Show()
+    end
+end
+
+local function ShowCurrenciesPanel()
+    if not CurrencyTrackerFrame or not CharacterFrame then
+        return
+    end
+
+    SyncFrameToCharacterLayout()
+
+    if type(PanelTemplates_GetSelectedTab) == "function" then
+        lastSelectedCharacterTabIndex = PanelTemplates_GetSelectedTab(CharacterFrame) or lastSelectedCharacterTabIndex or 1
+    end
+
+    DeselectDefaultCharacterTabs()
+    HideDefaultCharacterPanels()
+
+    EnsureInsetPanel()
+    EnsureScrollFrame()
+
+    for i = 1, MAX_ROWS do
+        if not rows[i] then
+            rows[i] = CreateRow(i)
+        end
+    end
+
+    UpdateRowLayout()
+    CurrencyTrackerFrame:Show()
+    if currenciesTab then
+        PanelTemplates_SelectTab(currenciesTab)
+    end
+    BuildFlatList()
+    CurrencyTracker_UpdateScroll()
+end
+
+local function HideCurrenciesPanel(restoreDefaultPanel)
+    if CurrencyTrackerFrame then
+        CurrencyTrackerFrame:Hide()
+    end
+
+    if currenciesTab then
+        PanelTemplates_DeselectTab(currenciesTab)
+    end
+
+    if restoreDefaultPanel and CharacterFrame and CharacterFrame:IsShown() then
+        ShowSelectedCharacterSubFrame()
+        RestoreDefaultCharacterTabHighlight()
+    end
+end
+
+local function GetLastCharacterTab()
+    local lastTab = nil
+    for i = 1, 10 do
+        local tab = _G["CharacterFrameTab" .. i]
+        if tab then
+            lastTab = tab
+        else
+            break
+        end
+    end
+
+    return lastTab
+end
+
+local function EnsureCurrenciesTab()
+    if currenciesTab or not CharacterFrame then
+        return
+    end
+
+    local tab = CreateFrame("Button", "CurrencyTrackerTab", CharacterFrame, "CharacterFrameTabButtonTemplate")
+    tab:SetText("Currencies")
+
+    local anchorTab = GetLastCharacterTab()
+    if anchorTab then
+        tab:SetPoint("LEFT", anchorTab, "RIGHT", -15, 0)
+    else
+        tab:SetPoint("BOTTOMLEFT", CharacterFrame, "BOTTOMLEFT", 60, -2)
+    end
+
+    if type(PanelTemplates_TabResize) == "function" then
+        PanelTemplates_TabResize(tab, 0)
+    end
+
+    tab:SetScript("OnClick", function()
+        if CurrencyTrackerFrame and CurrencyTrackerFrame:IsShown() then
+            HideCurrenciesPanel(true)
+        else
+            ShowCurrenciesPanel()
+        end
+    end)
+
+    PanelTemplates_DeselectTab(tab)
+    currenciesTab = tab
+
+    if type(hooksecurefunc) == "function" and type(CharacterFrame_ShowSubFrame) == "function" and not subFrameHookInstalled then
+        hooksecurefunc("CharacterFrame_ShowSubFrame", function(frameName)
+            if frameName and frameName ~= "CurrencyTrackerFrame" then
+                if type(PanelTemplates_GetSelectedTab) == "function" then
+                    lastSelectedCharacterTabIndex = PanelTemplates_GetSelectedTab(CharacterFrame) or lastSelectedCharacterTabIndex
+                end
+                HideCurrenciesPanel(false)
+            end
+        end)
+        subFrameHookInstalled = true
+    end
+end
+
+eventFrame = CreateFrame("Frame")
+eventFrame:RegisterEvent("ADDON_LOADED")
+eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("BAG_UPDATE_DELAYED")
+eventFrame:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
+eventFrame:RegisterEvent("BANKFRAME_OPENED")
+eventFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+
+eventFrame:SetScript("OnEvent", function(_, event, addon)
+    if event == "ADDON_LOADED" and addon == ADDON_NAME then
+        EnsureCharDB()
+        EnsureCountsDB()
+        EnsureFrameBackground()
+        SyncFrameToCharacterLayout()
+        EnsureInsetPanel()
+        EnsureScrollFrame()
+        EnsureCurrenciesTab()
+        UpdateHeaderVersionText()
+        Debug("CurrencyTracker loaded. v" .. ADDON_VERSION)
+
+        for i = 1, MAX_ROWS do
+            if not rows[i] then
+                rows[i] = CreateRow(i)
+            end
+        end
+
+        CharacterFrame:HookScript("OnHide", function()
+            HideCurrenciesPanel(false)
+        end)
+
+        CharacterFrame:HookScript("OnShow", function()
+            EnsureCurrenciesTab()
+            SyncFrameToCharacterLayout()
+            EnsureInsetPanel()
+            EnsureScrollFrame()
+            UpdateRowLayout()
+
+            if type(PanelTemplates_GetSelectedTab) == "function" and not CurrencyTrackerFrame:IsShown() then
+                lastSelectedCharacterTabIndex = PanelTemplates_GetSelectedTab(CharacterFrame) or lastSelectedCharacterTabIndex
+            end
+
+            UpdateHeaderVersionText()
+            if CurrencyTrackerFrame:IsShown() then
+                BuildFlatList()
+                CurrencyTracker_UpdateScroll()
+            end
+        end)
+    elseif event == "PLAYER_LOGIN" then
+        EnsureCharDB()
+        EnsureCountsDB()
+        EnsureCurrenciesTab()
+    elseif event == "BANKFRAME_OPENED" then
+        bankDataKnownThisSession = true
+        BuildFlatList()
+        if CurrencyTrackerFrame and CurrencyTrackerFrame:IsShown() then
+            CurrencyTracker_UpdateScroll()
+        end
+    elseif event == "GET_ITEM_INFO_RECEIVED" then
+        BuildFlatList()
+        if CurrencyTrackerFrame and CurrencyTrackerFrame:IsShown() then
+            CurrencyTracker_UpdateScroll()
+        end
+    elseif event == "BAG_UPDATE_DELAYED" or event == "PLAYERBANKSLOTS_CHANGED" then
+        BuildFlatList()
+        if CurrencyTrackerFrame and CurrencyTrackerFrame:IsShown() then
+            CurrencyTracker_UpdateScroll()
+        end
+    end
+end)
