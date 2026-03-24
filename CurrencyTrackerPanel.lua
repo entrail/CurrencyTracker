@@ -105,7 +105,7 @@ local function CreateRow(i)
     row:SetHeight(ROW_HEIGHT)
 
     if i == 1 then
-        row:SetPoint("TOPLEFT", CurrencyTrackerScrollFrame, "TOPLEFT", 2, -2)
+        row:SetPoint("TOPLEFT", CurrencyTrackerScrollFrame, "TOPLEFT", 0, 0)
     else
         row:SetPoint("TOPLEFT", rows[i - 1], "BOTTOMLEFT", 0, -ROW_SPACING)
     end
@@ -256,76 +256,44 @@ function CurrencyTracker_UpdateScroll()
 end
 
 ---------------------------------------------------------------------------
--- Inset panel
+-- Background (matching other CharacterFrame sub-panels)
 ---------------------------------------------------------------------------
 
-function Panel.EnsureInsetPanel()
+function Panel.EnsureBackground()
     if not CurrencyTrackerFrame then
         return
     end
 
-    if CurrencyTrackerFrame.ContentInset then
+    if CurrencyTrackerFrame.bgApplied then
         return
     end
 
-    local inset = CT.CreateFrameSafe("Frame", nil, CurrencyTrackerFrame, "InsetFrameTemplate3")
-    if not inset then
-        inset = CT.CreateFrameSafe("Frame", nil, CurrencyTrackerFrame, "InsetFrameTemplate")
-    end
-    if not inset then
-        inset = CreateFrame("Frame", nil, CurrencyTrackerFrame)
-    end
+    -- Use the same four background textures as PaperDollFrame / ReputationFrame
+    local bgTL = CurrencyTrackerFrame:CreateTexture(nil, "BORDER")
+    bgTL:SetTexture("Interface\\PaperDollInfoFrame\\UI-Character-General-TopLeft")
+    bgTL:SetSize(256, 256)
+    bgTL:SetPoint("TOPLEFT")
 
-    inset:SetPoint("TOPLEFT", CurrencyTrackerFrame, "TOPLEFT", 10, -13)
-    inset:SetPoint("BOTTOMRIGHT", CurrencyTrackerFrame, "BOTTOMRIGHT", -32, 75)
-    inset:SetFrameLevel(CurrencyTrackerFrame:GetFrameLevel() + 1)
+    local bgTR = CurrencyTrackerFrame:CreateTexture(nil, "BORDER")
+    bgTR:SetTexture("Interface\\PaperDollInfoFrame\\UI-Character-General-TopRight")
+    bgTR:SetSize(128, 256)
+    bgTR:SetPoint("TOPRIGHT")
 
-    if not inset.SetBackdrop then
-        local borderColorR, borderColorG, borderColorB, borderAlpha = 0.75, 0.66, 0.40, 0.9
-        local bgColorR, bgColorG, bgColorB, bgAlpha = 0.04, 0.04, 0.04, 0.82
+    local bgBL = CurrencyTrackerFrame:CreateTexture(nil, "BORDER")
+    bgBL:SetTexture("Interface\\PaperDollInfoFrame\\UI-Character-General-BottomLeft")
+    bgBL:SetSize(256, 256)
+    bgBL:SetPoint("BOTTOMLEFT")
 
-        local fill = inset:CreateTexture(nil, "BACKGROUND")
-        fill:SetTexture("Interface\\Buttons\\WHITE8x8")
-        fill:SetAllPoints(inset)
-        fill:SetVertexColor(bgColorR, bgColorG, bgColorB, bgAlpha)
+    local bgBR = CurrencyTrackerFrame:CreateTexture(nil, "BORDER")
+    bgBR:SetTexture("Interface\\PaperDollInfoFrame\\UI-Character-General-BottomRight")
+    bgBR:SetSize(128, 256)
+    bgBR:SetPoint("BOTTOMRIGHT")
 
-        local top = inset:CreateTexture(nil, "BORDER")
-        top:SetTexture("Interface\\Buttons\\WHITE8x8")
-        top:SetPoint("TOPLEFT", inset, "TOPLEFT", 0, 0)
-        top:SetPoint("TOPRIGHT", inset, "TOPRIGHT", 0, 0)
-        top:SetHeight(1)
-        top:SetVertexColor(borderColorR, borderColorG, borderColorB, borderAlpha)
+    CurrencyTrackerFrame.bgApplied = true
 
-        local bottom = inset:CreateTexture(nil, "BORDER")
-        bottom:SetTexture("Interface\\Buttons\\WHITE8x8")
-        bottom:SetPoint("BOTTOMLEFT", inset, "BOTTOMLEFT", 0, 0)
-        bottom:SetPoint("BOTTOMRIGHT", inset, "BOTTOMRIGHT", 0, 0)
-        bottom:SetHeight(1)
-        bottom:SetVertexColor(borderColorR, borderColorG, borderColorB, borderAlpha)
-
-        local left = inset:CreateTexture(nil, "BORDER")
-        left:SetTexture("Interface\\Buttons\\WHITE8x8")
-        left:SetPoint("TOPLEFT", inset, "TOPLEFT", 0, 0)
-        left:SetPoint("BOTTOMLEFT", inset, "BOTTOMLEFT", 0, 0)
-        left:SetWidth(1)
-        left:SetVertexColor(borderColorR, borderColorG, borderColorB, borderAlpha)
-
-        local right = inset:CreateTexture(nil, "BORDER")
-        right:SetTexture("Interface\\Buttons\\WHITE8x8")
-        right:SetPoint("TOPRIGHT", inset, "TOPRIGHT", 0, 0)
-        right:SetPoint("BOTTOMRIGHT", inset, "BOTTOMRIGHT", 0, 0)
-        right:SetWidth(1)
-        right:SetVertexColor(borderColorR, borderColorG, borderColorB, borderAlpha)
-    end
-
-    CurrencyTrackerFrame.ContentInset = inset
-
-    -- Reparent the title onto the inset so it draws above the inset background
+    -- Ensure title draws above the background textures
     if CurrencyTrackerFrameTitle then
-        CurrencyTrackerFrameTitle:SetParent(inset)
         CurrencyTrackerFrameTitle:SetDrawLayer("OVERLAY")
-        CurrencyTrackerFrameTitle:ClearAllPoints()
-        CurrencyTrackerFrameTitle:SetPoint("TOPLEFT", inset, "TOPLEFT", 10, -18)
     end
 end
 
@@ -334,22 +302,30 @@ end
 ---------------------------------------------------------------------------
 
 function Panel.EnsureScrollFrame()
-    Panel.EnsureInsetPanel()
+    Panel.EnsureBackground()
 
-    local parent = CurrencyTrackerFrame.ContentInset or CurrencyTrackerFrame
-
-    if not parent then
+    if not CurrencyTrackerFrame then
         return
     end
 
     if not CurrencyTrackerScrollFrame then
-        local sf = CreateFrame("ScrollFrame", "CurrencyTrackerScrollFrame", parent, "FauxScrollFrameTemplate")
-        sf:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, -50)
-        sf:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 13, 6)
+        local sf = CreateFrame("ScrollFrame", "CurrencyTrackerScrollFrame", CurrencyTrackerFrame, "FauxScrollFrameTemplate")
+        sf:SetPoint("TOPLEFT", CurrencyTrackerFrame, "TOPLEFT", 22, -76)
+        sf:SetPoint("BOTTOMRIGHT", CurrencyTrackerFrame, "BOTTOMRIGHT", -22, 96)
+        sf:SetScript("OnVerticalScroll", function(self, offset)
+            FauxScrollFrame_OnVerticalScroll(self, offset, ROW_HEIGHT + ROW_SPACING, CurrencyTracker_UpdateScroll)
+        end)
     else
+        CurrencyTrackerScrollFrame:SetParent(CurrencyTrackerFrame)
         CurrencyTrackerScrollFrame:ClearAllPoints()
-        CurrencyTrackerScrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 6, -50)
-        CurrencyTrackerScrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 13, 6)
+        CurrencyTrackerScrollFrame:SetPoint("TOPLEFT", CurrencyTrackerFrame, "TOPLEFT", 22, -76)
+        CurrencyTrackerScrollFrame:SetPoint("BOTTOMRIGHT", CurrencyTrackerFrame, "BOTTOMRIGHT", -22, 96)
+        if not CurrencyTrackerScrollFrame.scrollScriptSet then
+            CurrencyTrackerScrollFrame:SetScript("OnVerticalScroll", function(self, offset)
+                FauxScrollFrame_OnVerticalScroll(self, offset, ROW_HEIGHT + ROW_SPACING, CurrencyTracker_UpdateScroll)
+            end)
+            CurrencyTrackerScrollFrame.scrollScriptSet = true
+        end
     end
 end
 
@@ -358,14 +334,11 @@ end
 ---------------------------------------------------------------------------
 
 function Panel.SyncLayout()
-    if not CurrencyTrackerFrame then
+    if not CurrencyTrackerFrame or not CharacterFrame then
         return
     end
 
-    if ReputationFrame then
-        CurrencyTrackerFrame:ClearAllPoints()
-        CurrencyTrackerFrame:SetAllPoints(ReputationFrame)
-    end
+    CurrencyTrackerFrame:SetAllPoints(CharacterFrame)
 end
 
 function Panel.UpdateVersionText()
@@ -387,7 +360,7 @@ local function EnsureAutoDepositCheckbox()
 
     local cb = CreateFrame("CheckButton", "CurrencyTrackerAutoDepositCB", CurrencyTrackerFrame, "UICheckButtonTemplate")
     cb:SetSize(22, 22)
-    cb:SetPoint("BOTTOMLEFT", CurrencyTrackerFrame, "BOTTOMLEFT", 14, 80)
+    cb:SetPoint("BOTTOMLEFT", CurrencyTrackerFrame, "BOTTOMLEFT", 25, 85)
     cb:SetChecked(CurrencyTrackerCharDB.autoDeposit == true)
     cb:SetScript("OnClick", function(self)
         CurrencyTrackerCharDB.autoDeposit = self:GetChecked() == true
@@ -414,15 +387,7 @@ function Panel.Show()
         return
     end
 
-    Panel.SyncLayout()
-    Panel.EnsureInsetPanel()
-    Panel.EnsureScrollFrame()
-    Panel.EnsureRows()
-    Panel.UpdateRowLayout()
-    CurrencyTrackerFrame:Show()
-    Panel.BuildFlatList()
-    Panel.UpdateScroll()
-    EnsureAutoDepositCheckbox()
+    CurrencyTrackerFrame:Show()  -- OnShow hook handles all setup
 end
 
 function Panel.Hide()
@@ -441,8 +406,24 @@ end
 
 function Panel.Init()
     Panel.SyncLayout()
-    Panel.EnsureInsetPanel()
+    Panel.EnsureBackground()
     Panel.EnsureScrollFrame()
     Panel.EnsureRows()
     Panel.UpdateVersionText()
+
+    -- When Blizzard's ToggleCharacter shows our frame, run full setup
+    if CurrencyTrackerFrame and not CurrencyTrackerFrame.onShowHooked then
+        CurrencyTrackerFrame:HookScript("OnShow", function()
+            Panel.SyncLayout()
+            Panel.EnsureBackground()
+            Panel.EnsureScrollFrame()
+            Panel.EnsureRows()
+            Panel.UpdateRowLayout()
+            Panel.BuildFlatList()
+            Panel.UpdateScroll()
+            Panel.UpdateVersionText()
+            EnsureAutoDepositCheckbox()
+        end)
+        CurrencyTrackerFrame.onShowHooked = true
+    end
 end

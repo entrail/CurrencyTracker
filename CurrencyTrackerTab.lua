@@ -1,8 +1,8 @@
 -- CurrencyTrackerTab.lua
 -- ============================================================
--- The "Currencies" tab button on CharacterFrame plus the
--- show / hide orchestration that coordinates the panel with
--- the default character-frame tabs and portrait.
+-- The "Currencies" tab button on CharacterFrame.
+-- Integrates with Blizzard's tab system via CHARACTERFRAME_SUBFRAMES
+-- for native show/hide behavior and tab highlighting.
 -- ============================================================
 
 local _, CT = ...
@@ -11,132 +11,9 @@ local Tab = {}
 CT.Tab = Tab
 
 local tabButton = nil
-local subFrameHookInstalled = false
-local lastSelectedCharacterTabIndex = nil
 
 ---------------------------------------------------------------------------
--- CharacterFrame helpers
----------------------------------------------------------------------------
-
-local function DeselectDefaultCharacterTabs()
-    for i = 1, 10 do
-        local tab = _G["CharacterFrameTab" .. i]
-        if not tab then
-            break
-        end
-
-        PanelTemplates_DeselectTab(tab)
-    end
-end
-
-local function RestoreDefaultCharacterTabHighlight()
-    if not lastSelectedCharacterTabIndex then
-        return
-    end
-
-    local tab = _G["CharacterFrameTab" .. lastSelectedCharacterTabIndex]
-    if tab then
-        PanelTemplates_SelectTab(tab)
-    end
-end
-
-local function HideDefaultCharacterPanels()
-    if PaperDollFrame then PaperDollFrame:Hide() end
-    if ReputationFrame then ReputationFrame:Hide() end
-    if SkillFrame then SkillFrame:Hide() end
-    if PVPFrame then PVPFrame:Hide() end
-end
-
-local function ShowSelectedCharacterSubFrame()
-    local frameName = nil
-
-    if CharacterFrame and type(CHARACTERFRAME_SUBFRAMES) == "table" and type(PanelTemplates_GetSelectedTab) == "function" then
-        local selectedTab = PanelTemplates_GetSelectedTab(CharacterFrame) or 1
-        frameName = CHARACTERFRAME_SUBFRAMES[selectedTab]
-    end
-
-    if not frameName then
-        frameName = "PaperDollFrame"
-    end
-
-    if not InCombatLockdown() and type(CharacterFrame_ShowSubFrame) == "function" then
-        CharacterFrame_ShowSubFrame(frameName)
-        return
-    end
-
-    local frame = _G[frameName]
-    if frame then
-        frame:Show()
-    end
-end
-
-local function HidePortrait()
-    if CharacterModelFrame then CharacterModelFrame:Hide() end
-    if CharacterFramePortrait then CharacterFramePortrait:Hide() end
-end
-
-local function ShowPortrait()
-    if CharacterModelFrame then CharacterModelFrame:Show() end
-    if CharacterFramePortrait then CharacterFramePortrait:Show() end
-end
-
-local function GetLastCharacterTab()
-    local lastTab = nil
-    for i = 1, 10 do
-        local tab = _G["CharacterFrameTab" .. i]
-        if tab then
-            lastTab = tab
-        else
-            break
-        end
-    end
-
-    return lastTab
-end
-
----------------------------------------------------------------------------
--- Show / Hide currencies (orchestrates Panel + CharacterFrame state)
----------------------------------------------------------------------------
-
-function Tab.ShowCurrencies()
-    CT.Debug("ShowCurrenciesPanel called")
-    if not CurrencyTrackerFrame or not CharacterFrame then
-        CT.Debug("  Aborted: missing CurrencyTrackerFrame or CharacterFrame")
-        return
-    end
-
-    if type(PanelTemplates_GetSelectedTab) == "function" then
-        lastSelectedCharacterTabIndex = PanelTemplates_GetSelectedTab(CharacterFrame) or lastSelectedCharacterTabIndex or 1
-    end
-
-    DeselectDefaultCharacterTabs()
-    HideDefaultCharacterPanels()
-    HidePortrait()
-
-    CT.Panel.Show()
-
-    if tabButton then
-        PanelTemplates_SelectTab(tabButton)
-    end
-end
-
-function Tab.HideCurrencies(restoreDefaultPanel)
-    CT.Debug("HideCurrenciesPanel called (restore=" .. tostring(restoreDefaultPanel) .. ")")
-    ShowPortrait()
-    CT.Panel.Hide()
-
-    if tabButton then
-        PanelTemplates_DeselectTab(tabButton)
-    end
-
-    if restoreDefaultPanel and CharacterFrame and CharacterFrame:IsShown() then
-        ShowSelectedCharacterSubFrame()
-        RestoreDefaultCharacterTabHighlight()
-    end
-end
-
----------------------------------------------------------------------------
--- Init (called once during ADDON_LOADED)
+-- Init (called during ADDON_LOADED and PLAYER_LOGIN)
 ---------------------------------------------------------------------------
 
 function Tab.Init()
@@ -144,60 +21,59 @@ function Tab.Init()
         return
     end
 
-    local tab = CreateFrame("Button", "CurrencyTrackerTab", CharacterFrame, "CharacterFrameTabButtonTemplate")
-    tab:SetText("Currencies")
+    -- Determine new tab index
+    local numTabs = (CharacterFrame.numTabs or 4) + 1
 
-    local anchorTab = GetLastCharacterTab()
-    if anchorTab then
-        tab:SetPoint("LEFT", anchorTab, "RIGHT", -15, 0)
+    -- Create tab with standard CharacterFrame naming so Blizzard's
+    -- tab system recognises it for highlighting and layout.
+    local tab = CreateFrame("Button", "CharacterFrameTab" .. numTabs, CharacterFrame, "CharacterFrameTabButtonTemplate")
+    tab:SetText("Currencies")
+    tab:SetID(numTabs)
+
+    local prevTab = _G["CharacterFrameTab" .. (numTabs - 1)]
+    if prevTab then
+        tab:SetPoint("LEFT", prevTab, "RIGHT", -16, 0)
     else
         tab:SetPoint("BOTTOMLEFT", CharacterFrame, "BOTTOMLEFT", 60, -2)
     end
+
+    PanelTemplates_SetNumTabs(CharacterFrame, numTabs)
 
     if type(PanelTemplates_TabResize) == "function" then
         PanelTemplates_TabResize(tab, 0)
     end
 
-    tab:SetScript("OnClick", function()
-        if CT.Panel.IsShown() then
-            Tab.HideCurrencies(true)
-        else
-            Tab.ShowCurrencies()
-        end
-    end)
-
-    PanelTemplates_DeselectTab(tab)
     tabButton = tab
 
-    if type(hooksecurefunc) == "function" and type(CharacterFrame_ShowSubFrame) == "function" and not subFrameHookInstalled then
-        hooksecurefunc("CharacterFrame_ShowSubFrame", function(frameName)
-            if frameName and frameName ~= "CurrencyTrackerFrame" then
-                if type(PanelTemplates_GetSelectedTab) == "function" then
-                    lastSelectedCharacterTabIndex = PanelTemplates_GetSelectedTab(CharacterFrame) or lastSelectedCharacterTabIndex
-                end
-                Tab.HideCurrencies(false)
-            end
-        end)
-        subFrameHookInstalled = true
+    -- Register panel so CharacterFrame_ShowSubFrame hides/shows it
+    -- alongside the default sub-frames automatically.
+    tinsert(CHARACTERFRAME_SUBFRAMES, "CurrencyTrackerFrame")
+
+    -- Hook the global CharacterFrameTab_OnClick so the template's
+    -- built-in OnClick still fires (which calls PanelTemplates_SetTab
+    -- for the raised-tab / hidden-border "connected" look).
+    -- Using CharacterFrame_ShowSubFrame (not ToggleCharacter) so that
+    -- re-clicking the same tab doesn't close the whole character menu.
+    local origOnClick = CharacterFrameTab_OnClick
+    CharacterFrameTab_OnClick = function(self, button)
+        if self:GetID() == numTabs then
+            CharacterFrame_ShowSubFrame("CurrencyTrackerFrame")
+            PanelTemplates_SetTab(CharacterFrame, numTabs)
+            PlaySound(SOUNDKIT.IG_CHARACTER_INFO_TAB)
+        else
+            origOnClick(self, button)
+        end
     end
 
-    -- CharacterFrame hooks
-    CharacterFrame:HookScript("OnHide", function()
-        Tab.HideCurrencies(false)
-    end)
-
+    -- Ensure layout is up to date when CharacterFrame is shown
     CharacterFrame:HookScript("OnShow", function()
         Tab.Init()
         CT.Panel.SyncLayout()
-        CT.Panel.EnsureInsetPanel()
+        CT.Panel.EnsureBackground()
         CT.Panel.EnsureScrollFrame()
         CT.Panel.UpdateRowLayout()
-
-        if type(PanelTemplates_GetSelectedTab) == "function" and not CT.Panel.IsShown() then
-            lastSelectedCharacterTabIndex = PanelTemplates_GetSelectedTab(CharacterFrame) or lastSelectedCharacterTabIndex
-        end
-
         CT.Panel.UpdateVersionText()
+
         if CT.Panel.IsShown() then
             CT.Panel.BuildFlatList()
             CT.Panel.UpdateScroll()
