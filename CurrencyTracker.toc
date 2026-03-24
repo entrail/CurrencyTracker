@@ -1,6 +1,6 @@
 ## Interface: 20505
 ## Title: CurrencyTracker
-## Version: 1.4.1
+## Version: 1.0.0
 ## Notes: Adds a currencies tab control with classic inset styling and safe tab switching
 ## SavedVariables: CurrencyTrackerDB
 ## SavedVariablesPerCharacter: CurrencyTrackerCharDB
