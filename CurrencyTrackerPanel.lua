@@ -387,7 +387,15 @@ function Panel.Show()
         return
     end
 
-    CurrencyTrackerFrame:Show()  -- OnShow hook handles all setup
+    Panel.SyncLayout()
+    Panel.EnsureBackground()
+    Panel.EnsureScrollFrame()
+    Panel.EnsureRows()
+    Panel.UpdateRowLayout()
+    CurrencyTrackerFrame:Show()
+    Panel.BuildFlatList()
+    Panel.UpdateScroll()
+    EnsureAutoDepositCheckbox()
 end
 
 function Panel.Hide()
